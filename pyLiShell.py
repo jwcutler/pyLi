@@ -20,7 +20,8 @@
 #               xx Add code to rx over port
 #               -- TCP socket for TX/RXing data.  Lithium packet headers stripped and not added, just the raw data is sent through.  Bytes sent when a full packet is ready, that is payload is 255 bytes.
 #               -- Double check against known software
-#               -- Test all commands!
+#               - Test all commands!
+#               - Add error checking.  :/
 # Notes:        -
 # -------------------------------------------------------------------------------
 
@@ -203,8 +204,8 @@ class pyLiShell(cmd.Cmd):
     prompt = 'pyLi>'
     #liD = None
 
-    # HOST = 'localhost'
-    # PORT = 12601
+    HOST = 'localhost'
+    PORT = 12601
     # FILE = 'temp.txt'
     # WRAP_NUM = 10
 
@@ -230,6 +231,16 @@ class pyLiShell(cmd.Cmd):
         'Send a no_op (no operation)'
         self.sendCommand(0x1001, None )
         self.receiveAck()
+
+    def do_sockrx(self, arg):
+        'Received data from radio and send to socket'
+        self.rxDataFromRadio()
+        return
+
+    def do_socktx(self, arg):
+        'Send data to radio from socket'
+        self.txDataFromSocket()
+        return
 
     def do_setsrc(self, arg):
         'Set SRC call sign'
@@ -286,6 +297,58 @@ class pyLiShell(cmd.Cmd):
     #--------------------------------------------------------------------------
     # Other functions
     #--------------------------------------------------------------------------
+
+    def transmitData(self,data):
+        self.sendCommand( 0x0103, data )
+        self.receiveAck()
+        return
+
+    def receiveData(self,data):
+        print('Receiving data.')
+        bytes = readSerial()
+        l = len(bytes)
+        # Check checksums
+        if self.checkCheckSum(bytes[2:l]) == False:
+            print('ERROR: failed checksum')
+
+        return( bytes[8:l-2] )
+
+    def txDataFromSocket(self):
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            s.connect((self.HOST, int(PORT)))
+        except socket.error as msg:
+            print('\tBind failed.  Error Code: ', str(msg[0]), ' Message ', msg[1])
+            break
+
+        try:
+            while True:
+                data = s.recv(255)
+                self.transmitData(data)
+        finally:
+            s.close()
+
+        return
+
+    def rxDataFromRadio(self):
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            s.connect((self.HOST, int(PORT)))
+        except socket.error as msg:
+            print('\tBind failed.  Error Code: ', str(msg[0]), ' Message ', msg[1])
+            break
+
+        try:
+            while True:
+                # rx data from serial
+                data = receiveData()
+                # send to socket
+                s.sendall( data )
+        finally:
+            s.close()
+
+        return
+
     def checkCheckSum(self, bytes):
         l = len(bytes)
         chkA, chkB = self.calculate_checksum( bytes, l-2)   # Set Header Checksums
@@ -299,21 +362,16 @@ class pyLiShell(cmd.Cmd):
         print('Receiving configuration.')
         # Read in from serial, check for number of bytes
         bytes = readSerial()
+        l = len(bytes)
         # Check checksums
-        if len(bytes) != TBD:
-            print('ERROR: invalid # of bytes(',len(bytes),')')
+        if l != (8+34+2):
+            print('ERROR: invalid # of bytes(',l,')')
             return
-        if (checkCheckSum(bytes(2:)) == False):
+        if self.checkCheckSum(bytes[2:l]) == False:
             print('ERROR: failed checksum')
-
         # Extract Configuration
-
-
-
+        self.liD.radioConfiguration = bytes[8:l-2]
         return
-
-        # Parse config into config variable
-        # TBD
 
     def readSerial(self):
         bytes = bytearray()
@@ -341,10 +399,20 @@ class pyLiShell(cmd.Cmd):
 
     def receiveTelemetry(self):
         print('Receiving telemetry.')
-        # TBD
-        # Read in from socket, check for number of bytes
+
+        # Read in from serial, check for number of bytes
+        bytes = readSerial()
+        l = len(bytes)
         # Check checksums
-        # Parse  into config variable
+        if l != (8+16+2):
+            print('ERROR: invalid # of bytes(',l,')')
+            return
+        if self.checkCheckSum(bytes[2:l]) == False:
+            print('ERROR: failed checksum')
+        # Extract Telemetry
+        self.liD.radioConfiguration = bytes[8:l-2]
+        return
+
 
     def printConfiguration(self):
         self.liD.print('Printing configuration.')
@@ -400,7 +468,6 @@ class pyLiShell(cmd.Cmd):
         printBytes( cmd )
 
         sendToSerial( cmd )
-        # abc
         return
 
     def sendToSerial(self, data):
