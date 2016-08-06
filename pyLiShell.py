@@ -9,23 +9,22 @@
 #               xx Open serial port
 #               xx Set TX frequency.
 #               xx Set RX frequency.
-#               -- Query settings.
-#               -- Display settings.
-#               -- Query telem (RSSI, packets rx/tx)
-#               -- Display telem (RSSI, packets rx/tx)
+#               xx Query settings.
+#               xx Display settings.
+#               xx Query telem (RSSI, packets rx/tx)
+#               xx Display telem (RSSI, packets rx/tx)
 #               xx Ping...to get an  ack back.
-#               -- Parse ack
-#               -- Check checksums
-#               -- Add code to send over serial port
-#               -- Add code to rx over port
+#               xx Parse ack
+#               xx Check checksums
+#               xx Add code to send over serial port
+#               xx Add code to rx over port
 #               -- TCP socket for TX/RXing data.  Lithium packet headers stripped and not added, just the raw data is sent through.  Bytes sent when a full packet is ready, that is payload is 255 bytes.
-#               -- Read response from Lithium
 #               -- Double check against known software
 #               -- Test all commands!
 # Notes:        -
 # -------------------------------------------------------------------------------
 
-import sys, socket, cmd
+import sys, socket, cmd, time
 
 def intToByteArray(value, size):
     b = bytearray(size)
@@ -39,8 +38,15 @@ def intToByteArray(value, size):
     #print (''.join('{:02x}'.format(x) for x in b))
     return b
 
+def printBytes( data ):
+    print (' '.join('{:02x}'.format(x) for x in data))
+
+
 class lithium():
     # #defines for Lithium
+    IF_BAUD = ['9600', '19200', '38400', '76800', '115200']
+    RF_BAUD = ['1200', '9600', '19200', '38400' ]
+    MODULATION = ['GFSK', 'AFSK', 'BPSK']
     NO_OP_COMMAND = 0x01
     RESET_SYSTEM = 0x02
     TRANSMIT_DATA = 0x03
@@ -83,12 +89,12 @@ class lithium():
         #   Telem description in code.
         #   typedef struct telem_type
         #   {
-        #           uint_2 op_counter;
-        #           sint_2 msp430_temp;
-        #           uint_1 time_count[3];
-        #           uint_1 rssi;
-        #           uint_4 bytes_received;
-        #           uint_4 bytes_transmitted;
+        #      0    uint_2 op_counter;
+        #      2    sint_2 msp430_temp;
+        #      4    uint_1 time_count[3];
+        #      7    uint_1 rssi;
+        #      8    uint_4 bytes_received;
+        #      12   uint_4 bytes_transmitted;
         #   } TELEMETRY_STRUCTURE_type;
 
         self.radioConfiguration = bytearray(34)
@@ -118,6 +124,58 @@ class lithium():
 
     def helloWorld(self):
         print('Lithium: Hello World')
+
+        #int.from_bytes(self.telemetryBytes[0:2], byteorder='big', signed=False) )
+    def printTelemetry(self):
+        print('Lithium Telemetry:')
+        print('Op Counter: ', int.from_bytes(self.telemetryBytes[0:2], byteorder='big', signed=False) )
+        print('uProc Temp: ', int.from_bytes(self.telemetryBytes[2:4], byteorder='big', signed=True) )
+        print('Time Count: ', int.from_bytes(self.telemetryBytes[4:7], byteorder='big', signed=True) )
+        print('RSSI:       ', self.telemetryBytes[7] )
+        print('Bytes rxd:  ', int.from_bytes(self.telemetryBytes[8:12], byteorder='big', signed=True) )
+        print('Bytes txd:  ', int.from_bytes(self.telemetryBytes[12:16], byteorder='big', signed=True) )
+        return
+
+    def printConfiguration(self):
+        print('Lithium Configuration:')
+        print('\tIF bps:    ', self.radioConfiguration[0], ' ', self.IF_BAUD[self.radioConfiguration[0]])
+        print('\tTX PA lvl: ', self.radioConfiguration[1] )
+        print('\tTX baud:   ', self.radioConfiguration[3], ' ', self.RF_BAUD[self.radioConfiguration[3]])
+        print('\tTX mod:    ', self.radioConfiguration[5], ' ', self.MODULATION[self.radioConfiguration[5]])
+        print('\tTX freq:   ', int.from_bytes(self.radioConfiguration[10:14], byteorder='big', signed=False) )
+        print('\tRX baud:   ', self.radioConfiguration[2], ' ', self.RF_BAUD[self.radioConfiguration[2]])
+        print('\tRX mod:    ', self.radioConfiguration[4], ' ', self.MODULATION[self.radioConfiguration[4]])
+        print('\tRX freq:   ', int.from_bytes(self.radioConfiguration[6:10], byteorder='big', signed=False) )
+        print('\tSrc call:  ', "".join(map(chr,self.radioConfiguration[14:20])))
+        print('\tDst call:  ', "".join(map(chr,self.radioConfiguration[20:26])))
+        print('\tTX preAm:  ',int.from_bytes(self.radioConfiguration[26:28], byteorder='big', signed=False) )
+        print('\tTX postAm: ',int.from_bytes(self.radioConfiguration[28:39], byteorder='big', signed=False) )
+        print('\tFunc 1:     ', end='')
+        print (' '.join('0x{:02x}'.format(x) for x in self.radioConfiguration[30:32]))
+        print('\tFunc 2:     ', end='')
+        print (' '.join('0x{:02x}'.format(x) for x in self.radioConfiguration[32:34]))
+        #int.from_bytes(self.radioConfiguration[6:10], byteorder='big', signed=False)
+
+    def setSrcCall(self, src):
+        l = len(src)
+        if l > 6:
+            l = 6
+        b = bytearray()
+        b.extend(map(ord,src))
+        for i in range(0,l):
+            self.radioConfiguration[14+i] = b[i]
+        return
+
+    def setDstCall(self, src):
+        l = len(src)
+        if l > 6:
+            l = 6
+        b = bytearray()
+        b.extend(map(ord,src))
+        for i in range(0,l):
+            self.radioConfiguration[20+i] = b[i]
+        return
+
 
     def setTxFreq(self, freq):
         bytes = intToByteArray( freq, 4 )
@@ -173,18 +231,30 @@ class pyLiShell(cmd.Cmd):
         self.sendCommand(0x1001, None )
         self.receiveAck()
 
+    def do_setsrc(self, arg):
+        'Set SRC call sign'
+        self.liD.setSrcCall( arg )
+        self.sendCommand( 0x0106, self.liD.radioConfiguration )
+        self.receiveAck()
+
+    def do_setdst(self, arg):
+        'Set DST call sign'
+        self.liD.setDstCall( arg )
+        self.sendCommand( 0x0106, self.liD.radioConfiguration )
+        self.receiveAck()
+
     def do_qc(self, arg):
         'Query configuation'
         self.sendCommand(0x1005, None)
         self.receiveConfiguration()
-        self.printBytes( self.liD.radioConfiguration )
-        self.printConfiguration()
+        printBytes( self.liD.radioConfiguration )
+        self.liD.printConfiguration()
 
     def do_qt(self, arg):
         'Query telemetry '
         self.sendCommand(0x1007, None)
         self.receiveTelemetry()
-        self.printBytes( self.liD.radioTelemetry )
+        #printBytes( self.liD.radioTelemetry )
         self.printTelemetry()
 
     def do_settx(self, arg):
@@ -216,34 +286,72 @@ class pyLiShell(cmd.Cmd):
     #--------------------------------------------------------------------------
     # Other functions
     #--------------------------------------------------------------------------
+    def checkCheckSum(self, bytes):
+        l = len(bytes)
+        chkA, chkB = self.calculate_checksum( bytes, l-2)   # Set Header Checksums
+        if chkA != bytes[len-2]:
+            return False
+        if chkB != bytes[len-1]:
+            return False
+        return True
+
     def receiveConfiguration(self):
-        print('Receiving ack.')
-        # TBD
-        # Read in from socket, check for number of bytes
+        print('Receiving configuration.')
+        # Read in from serial, check for number of bytes
+        bytes = readSerial()
         # Check checksums
+        if len(bytes) != TBD:
+            print('ERROR: invalid # of bytes(',len(bytes),')')
+            return
+        if (checkCheckSum(bytes(2:)) == False):
+            print('ERROR: failed checksum')
+
+        # Extract Configuration
+
+
+
+        return
+
         # Parse config into config variable
+        # TBD
+
+    def readSerial(self):
+        bytes = bytearray()
+        while self.serialPort.inWaiting() > 0:
+            bytes.append(self.serialPort.read())
+        return( bytes )
 
     def receiveAck(self):
         print('Receiving ack.')
-        # TBD
-        # Read in from socket, check for number of bytes
-        # Check checksums
+        bytes = readSerial()
+        if len(bytes) != 8:
+            print('ERROR: invalid # of bytes(',len(bytes),')')
+            return
+        if checkCheckSum(bytes(2:)) == False:
+            print('ERROR: failed checksum')
+            return
+
         # Parse for ack
+        if (bytes[4] == 0x0A) && (bytes[5] == 0x0A):
+            print ('ACK received.')
+        else:
+            print ('NACK received.')
+        return
+
 
     def receiveTelemetry(self):
-        print('Receiving configuration.')
+        print('Receiving telemetry.')
         # TBD
         # Read in from socket, check for number of bytes
         # Check checksums
         # Parse  into config variable
 
     def printConfiguration(self):
-        print('Printing configuration.')
-        # TBD
+        self.liD.print('Printing configuration.')
 
     def printTelemetry(self):
-        print('Printing Telemetry.')
-        # TBD
+        print('Printing telemetry.')
+        self.liD.printTelemetry()
 
     def getByte(self, n, value):
         # Shift n times
@@ -257,9 +365,6 @@ class pyLiShell(cmd.Cmd):
             sum1 = (sum1+data[i]) % 255
             sum2 = (sum2+sum1) % 255
         return sum2, sum1
-
-    def printBytes( self, data ):
-        print (' '.join('{:02x}'.format(x) for x in data))
 
     def sendCommand(self, cmdID, args):
         #print('Sending command: ', cmdID)
@@ -292,13 +397,14 @@ class pyLiShell(cmd.Cmd):
             cmd[6],cmd[7] = self.calculate_checksum( cmd, 6)   # Set Header Checksums
             #argLen = 0
 
-        #cmd[6],cmd[7] = self.calculate_checksum( cmd, 6)   # Set Header Checksums
+        printBytes( cmd )
 
+        sendToSerial( cmd )
+        # abc
+        return
 
-        #Print cmd bytes in Hex
-        self.printBytes( cmd )
-
-        # Send bytes to UART TBD
+    def sendToSerial(self, data):
+        self.serialPort.write(data.encode())
 
 
     # ----------------------------------
@@ -451,3 +557,7 @@ if __name__ == '__main__':
     pyLi = pyLiShell()
     pyLi.do_settx("437001")
     pyLi.do_setrx("437002")
+    pyLi.do_setdst("CQ")
+    pyLi.do_setsrc("KF6RFX")
+    pyLi.do_qc(None)
+    pyLi.do_qt(None)
