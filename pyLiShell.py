@@ -6,26 +6,29 @@
 # Version:      0.1
 # Date:         04 August 2016
 # Todo:         - Commands to implement
-#               xx Open serial port
-#               xx Set TX frequency.
-#               xx Set RX frequency.
-#               xx Query settings.
-#               xx Display settings.
-#               xx Query telem (RSSI, packets rx/tx)
-#               xx Display telem (RSSI, packets rx/tx)
-#               xx Ping...to get an  ack back.
-#               xx Parse ack
-#               xx Check checksums
-#               xx Add code to send over serial port
-#               xx Add code to rx over port
 #               -- TCP socket for TX/RXing data.  Lithium packet headers stripped and not added, just the raw data is sent through.  Bytes sent when a full packet is ready, that is payload is 255 bytes.
 #               -- Double check against known software
 #               - Test all commands!
+#               -- sockrx
+#               -- socktx
+#               xx setsrc
+#               xx setdst
+#               xx qt
+#               xx settxf
+#               xx setrxf
+#               -- transmit
+#               -- receive
+#                - stops working after a power cycle of radio?
+# xx Test open port
+# xx Test noop
+# xx- What are we getting back?
 #               - Add error checking.  :/
-# Notes:        -
+# Notes:        - A valid NOOP: 48 65 10 01 00 00 11 43
+#                               48 65 20 01 0A 0A 35 A1
 # -------------------------------------------------------------------------------
 
-import sys, socket, cmd, time
+import sys, socket, cmd, time, serial
+from time import sleep
 
 def intToByteArray(value, size):
     b = bytearray(size)
@@ -85,8 +88,8 @@ class lithium():
     def __init__(self):
         # Create Telemetry array
 
-        # telemetryBytes = array('B',[0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00])
-        self.telemetryBytes = bytearray(16)
+        # radioTelemetry = array('B',[0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00])
+        self.radioTelemetry = bytearray(16)
         #   Telem description in code.
         #   typedef struct telem_type
         #   {
@@ -126,15 +129,15 @@ class lithium():
     def helloWorld(self):
         print('Lithium: Hello World')
 
-        #int.from_bytes(self.telemetryBytes[0:2], byteorder='big', signed=False) )
+        #int.from_bytes(self.radioTelemetry[0:2], byteorder='big', signed=False) )
     def printTelemetry(self):
         print('Lithium Telemetry:')
-        print('Op Counter: ', int.from_bytes(self.telemetryBytes[0:2], byteorder='big', signed=False) )
-        print('uProc Temp: ', int.from_bytes(self.telemetryBytes[2:4], byteorder='big', signed=True) )
-        print('Time Count: ', int.from_bytes(self.telemetryBytes[4:7], byteorder='big', signed=True) )
-        print('RSSI:       ', self.telemetryBytes[7] )
-        print('Bytes rxd:  ', int.from_bytes(self.telemetryBytes[8:12], byteorder='big', signed=True) )
-        print('Bytes txd:  ', int.from_bytes(self.telemetryBytes[12:16], byteorder='big', signed=True) )
+        print('Op Counter: ', int.from_bytes(self.radioTelemetry[0:2], byteorder='little', signed=False) )
+        print('uProc Temp: ', int.from_bytes(self.radioTelemetry[2:4], byteorder='little', signed=True) )
+        print('Time Count: ', int.from_bytes(self.radioTelemetry[4:7], byteorder='little', signed=True) )
+        print('RSSI:       ', self.radioTelemetry[7] )
+        print('Bytes rxd:  ', int.from_bytes(self.radioTelemetry[8:12], byteorder='little', signed=True) )
+        print('Bytes txd:  ', int.from_bytes(self.radioTelemetry[12:16], byteorder='little', signed=True) )
         return
 
     def printConfiguration(self):
@@ -143,14 +146,14 @@ class lithium():
         print('\tTX PA lvl: ', self.radioConfiguration[1] )
         print('\tTX baud:   ', self.radioConfiguration[3], ' ', self.RF_BAUD[self.radioConfiguration[3]])
         print('\tTX mod:    ', self.radioConfiguration[5], ' ', self.MODULATION[self.radioConfiguration[5]])
-        print('\tTX freq:   ', int.from_bytes(self.radioConfiguration[10:14], byteorder='big', signed=False) )
+        print('\tTX freq:   ', int.from_bytes(self.radioConfiguration[10:14], byteorder='little', signed=False) )
         print('\tRX baud:   ', self.radioConfiguration[2], ' ', self.RF_BAUD[self.radioConfiguration[2]])
         print('\tRX mod:    ', self.radioConfiguration[4], ' ', self.MODULATION[self.radioConfiguration[4]])
-        print('\tRX freq:   ', int.from_bytes(self.radioConfiguration[6:10], byteorder='big', signed=False) )
+        print('\tRX freq:   ', int.from_bytes(self.radioConfiguration[6:10], byteorder='little', signed=False) )
         print('\tSrc call:  ', "".join(map(chr,self.radioConfiguration[14:20])))
         print('\tDst call:  ', "".join(map(chr,self.radioConfiguration[20:26])))
-        print('\tTX preAm:  ',int.from_bytes(self.radioConfiguration[26:28], byteorder='big', signed=False) )
-        print('\tTX postAm: ',int.from_bytes(self.radioConfiguration[28:39], byteorder='big', signed=False) )
+        print('\tTX preAm:  ',int.from_bytes(self.radioConfiguration[26:28], byteorder='little', signed=False) )
+        print('\tTX postAm: ',int.from_bytes(self.radioConfiguration[28:30], byteorder='little', signed=False) )
         print('\tFunc 1:     ', end='')
         print (' '.join('0x{:02x}'.format(x) for x in self.radioConfiguration[30:32]))
         print('\tFunc 2:     ', end='')
@@ -161,42 +164,64 @@ class lithium():
         l = len(src)
         if l > 6:
             l = 6
-        b = bytearray()
-        b.extend(map(ord,src))
-        for i in range(0,l):
-            self.radioConfiguration[14+i] = b[i]
+        b = bytearray(src.encode())
+        for i in range(0,6):
+            if i < len(b):
+                self.radioConfiguration[14+i] = b[i]
+            else:
+                self.radioConfiguration[14+i] = 0x20 # pad with spaces.
         return
 
-    def setDstCall(self, src):
-        l = len(src)
+    def setDstCall(self, dst):
+        l = len(dst)
         if l > 6:
             l = 6
-        b = bytearray()
-        b.extend(map(ord,src))
-        for i in range(0,l):
-            self.radioConfiguration[20+i] = b[i]
+        b = bytearray(dst.encode())
+        for i in range(0,6):
+            if i < len(b):
+                self.radioConfiguration[20+i] = b[i]
+            else:
+                self.radioConfiguration[20+i] = 0x20 # pad with spaces.
         return
 
 
     def setTxFreq(self, freq):
         bytes = intToByteArray( freq, 4 )
         print('Len bytes:', len(bytes))
+        printBytes(bytes)
         #self.radioConfiguration[10:13] = bytes # For ssome reason this was adding a byte extra?
-        self.radioConfiguration[10] = bytes[0]
-        self.radioConfiguration[11] = bytes[1]
-        self.radioConfiguration[12] = bytes[2]
-        self.radioConfiguration[13] = bytes[3]
+        self.radioConfiguration[10] = bytes[3]
+        self.radioConfiguration[11] = bytes[2]
+        self.radioConfiguration[12] = bytes[1]
+        self.radioConfiguration[13] = bytes[0]
         return
 
     def setRxFreq(self, freq):
         bytes = intToByteArray( freq, 4 )
         print('Len bytes:', len(bytes))
         #self.radioConfiguration[6:9] = bytes # For ssome reason this was adding a byte extra?
-        self.radioConfiguration[6] = bytes[0]
-        self.radioConfiguration[7] = bytes[1]
-        self.radioConfiguration[8] = bytes[2]
-        self.radioConfiguration[9] = bytes[3]
+        self.radioConfiguration[6] = bytes[3]
+        self.radioConfiguration[7] = bytes[2]
+        self.radioConfiguration[8] = bytes[1]
+        self.radioConfiguration[9] = bytes[0]
         return
+
+    def setPostAmble(self, num):
+        bytes = intToByteArray( num, 2 )
+        print('Len bytes:', len(bytes))
+        #self.radioConfiguration[6:9] = bytes # For ssome reason this was adding a byte extra?
+        self.radioConfiguration[28] = bytes[1]
+        self.radioConfiguration[29] = bytes[0]
+        return
+
+    def setPreAmble(self, num):
+        bytes = intToByteArray( num, 2 )
+        print('Len bytes:', len(bytes))
+        #self.radioConfiguration[6:9] = bytes # For ssome reason this was adding a byte extra?
+        self.radioConfiguration[26] = bytes[1]
+        self.radioConfiguration[27] = bytes[0]
+        return
+
 
 
 class pyLiShell(cmd.Cmd):
@@ -206,13 +231,14 @@ class pyLiShell(cmd.Cmd):
 
     HOST = 'localhost'
     PORT = 12601
+    DEBUG = True
     # FILE = 'temp.txt'
     # WRAP_NUM = 10
 
     def __init__(self):
-        #global liD
-        print('Testing init.')
         self.liD = lithium()
+        self.do_connect(None)   # temp, XXX remove
+        self.do_qc( None)       # temp, XXX remove
         cmd.Cmd.__init__(self)
 
 
@@ -242,50 +268,88 @@ class pyLiShell(cmd.Cmd):
         self.txDataFromSocket()
         return
 
+    def do_setpre(self, arg):
+        'Set SRC call sign'
+        self.liD.setPreAmble( int(arg) )
+        self.sendCommand( 0x1006, self.liD.radioConfiguration )
+        self.receiveAck()
+
+    def do_setpost(self, arg):
+        'Set SRC call sign'
+        self.liD.setPostAmble( int(arg) )
+        self.sendCommand( 0x1006, self.liD.radioConfiguration )
+        self.receiveAck()
+
     def do_setsrc(self, arg):
         'Set SRC call sign'
         self.liD.setSrcCall( arg )
-        self.sendCommand( 0x0106, self.liD.radioConfiguration )
+        self.sendCommand( 0x1006, self.liD.radioConfiguration )
         self.receiveAck()
 
     def do_setdst(self, arg):
         'Set DST call sign'
         self.liD.setDstCall( arg )
-        self.sendCommand( 0x0106, self.liD.radioConfiguration )
+        self.sendCommand( 0x1006, self.liD.radioConfiguration )
         self.receiveAck()
 
     def do_qc(self, arg):
         'Query configuation'
+        if arg == "False":
+            self.liD.printConfiguration()
+            return
         self.sendCommand(0x1005, None)
-        self.receiveConfiguration()
-        printBytes( self.liD.radioConfiguration )
-        self.liD.printConfiguration()
+        ret = self.receiveConfiguration()
+        if ret == True:
+            printBytes( self.liD.radioConfiguration )
+            self.liD.printConfiguration()
 
     def do_qt(self, arg):
         'Query telemetry '
         self.sendCommand(0x1007, None)
         self.receiveTelemetry()
-        #printBytes( self.liD.radioTelemetry )
         self.printTelemetry()
 
-    def do_settx(self, arg):
+    def do_settxf(self, arg):
         'Set TX frequency'
         if (len(arg) != 6) or ( arg.isdigit() == False ):                   # Check Length and that we have a number
             print('ERROR: Argument must be a six digit number, for example, 437100.')
             return
         self.liD.setTxFreq( int(arg) )
-        self.sendCommand( 0x0106, self.liD.radioConfiguration )
+        self.sendCommand( 0x1006, self.liD.radioConfiguration )
         self.receiveAck()
+        # abc
 
 
-    def do_setrx(self, arg):
+    def do_setrxf(self, arg):
         'Set RX frequency'
         if (len(arg) != 6) or ( arg.isdigit() == False ):                   # Check Length and that we have a number
             print('ERROR: Argument must be a six digit number, for example, 437100.')
             return
         self.liD.setRxFreq( int(arg) )
-        self.sendCommand( 0x0106, self.liD.radioConfiguration )
+        self.sendCommand( 0x1006, self.liD.radioConfiguration )
         self.receiveAck()
+
+
+    def do_tx(self, arg):
+        'Transmit message.'
+        if arg == "":
+            self.sendCommand( 0x1003, b"testing" )
+        else:
+            self.sendCommand( 0x1003, arg.encode())
+        self.receiveAck()
+
+    def do_rx(self, arg):
+        'Receive message.'
+        n = 0
+        while n == 0:
+            n = self.serialPort.inWaiting()
+            sleep(0.05)
+        print("Bytes ready: ", n)
+        data = self.serialPort.read(n)
+        if len(data) > 0:
+            printBytes(data)
+            print("".join(map(chr,data)))
+
 
 
     def do_test(self, arg):
@@ -299,13 +363,13 @@ class pyLiShell(cmd.Cmd):
     #--------------------------------------------------------------------------
 
     def transmitData(self,data):
-        self.sendCommand( 0x0103, data )
+        self.sendCommand( 0x1003, data )
         self.receiveAck()
         return
 
     def receiveData(self,data):
         print('Receiving data.')
-        bytes = readSerial()
+        bytes = self.readSerial()
         l = len(bytes)
         # Check checksums
         if self.checkCheckSum(bytes[2:l]) == False:
@@ -319,7 +383,7 @@ class pyLiShell(cmd.Cmd):
             s.connect((self.HOST, int(PORT)))
         except socket.error as msg:
             print('\tBind failed.  Error Code: ', str(msg[0]), ' Message ', msg[1])
-            break
+            return
 
         try:
             while True:
@@ -336,7 +400,7 @@ class pyLiShell(cmd.Cmd):
             s.connect((self.HOST, int(PORT)))
         except socket.error as msg:
             print('\tBind failed.  Error Code: ', str(msg[0]), ' Message ', msg[1])
-            break
+            return
 
         try:
             while True:
@@ -351,67 +415,120 @@ class pyLiShell(cmd.Cmd):
 
     def checkCheckSum(self, bytes):
         l = len(bytes)
-        chkA, chkB = self.calculate_checksum( bytes, l-2)   # Set Header Checksums
-        if chkA != bytes[len-2]:
+        checks = bytearray(2)
+        checks[1], checks[0] = self.calculate_checksum( bytes, l-2)   # Set Header Checksums
+
+        if self.DEBUG == 1:
+            #print('CHK1: ', end='')
+            #printBytes(checks[1:2])
+            #print('CHK0: ', end='')
+            #printBytes(checks[0:1])
+            #print('Pak1: ', end='')
+            #printBytes(bytes[l-2:l-1])
+            #print('Pak0: ', end='')
+            #printBytes(bytes[l-1:l])
+            print ('', end='')
+
+        if checks[0] != bytes[l-2]:
             return False
-        if chkB != bytes[len-1]:
+        if checks[1] != bytes[l-1]:
             return False
         return True
 
     def receiveConfiguration(self):
         print('Receiving configuration.')
         # Read in from serial, check for number of bytes
-        bytes = readSerial()
+        bytes = self.readSerial(44)     # Should make this 44 smarter, as in checking packet length.
+                                        # Maybe have a generic packet parsing thread, but that's too much for this.
         l = len(bytes)
-        # Check checksums
+        if self.DEBUG == True:
+            #print('Received bytes: ', end='')
+            #printBytes(bytes)
+            print ('', end='')
+
+        # Check header checksums
+        if self.checkCheckSum(bytes[2:8]) == False:
+            print('ERROR: failed header checksum')
+            return False
+        else:
+            if self.DEBUG == True:
+                #print('\tHeader checksums good.')
+                print ('', end='')
+
+        # Check payload checksums and length
         if l != (8+34+2):
             print('ERROR: invalid # of bytes(',l,')')
-            return
-        if self.checkCheckSum(bytes[2:l]) == False:
+            return False
+        if self.checkCheckSum(bytes[2:]) == False:
             print('ERROR: failed checksum')
-        # Extract Configuration
-        self.liD.radioConfiguration = bytes[8:l-2]
-        return
+            return False
+        else:
+            if self.DEBUG == True:
+                print('\tPayload checksums good.')
 
-    def readSerial(self):
-        bytes = bytearray()
-        while self.serialPort.inWaiting() > 0:
-            bytes.append(self.serialPort.read())
-        return( bytes )
+        # Extract Configuration
+        for i in range(8,l-2):
+            self.liD.radioConfiguration[i-8] = bytes[i]
+        return True
+
+    def readSerial(self, len):
+        data = self.serialPort.read(len)
+        return( data )
+
+        #count = 0
+        #while self.serialPort.read():
+        #    count +=1
+        #print('Count: ', count)
+
+        #bytes = bytearray()
+        #i = 0
+        #while self.serialPort.inWaiting() > 0:
+        #    data = self.serialPort.read()
+        #    printBytes(data)
+        #    bytes[i:]=data
+        #    printBytes(bytes)
+        #    i = i+len(data)
+        #    #bytes.append(self.serialPort.read())
+        #return
+        #return( data )
 
     def receiveAck(self):
-        print('Receiving ack.')
-        bytes = readSerial()
+        #print('Receiving ack.')
+        bytes = self.readSerial(8)   # Hard coded 8, should make it smarter than this. XXX
+        #print('Received bytes: ', len(bytes))
         if len(bytes) != 8:
             print('ERROR: invalid # of bytes(',len(bytes),')')
             return
-        if checkCheckSum(bytes(2:)) == False:
+        if self.checkCheckSum(bytes[2:]) == False:
             print('ERROR: failed checksum')
             return
 
         # Parse for ack
-        if (bytes[4] == 0x0A) && (bytes[5] == 0x0A):
+        if (bytes[4] == 0x0A) and (bytes[5] == 0x0A):
             print ('ACK received.')
         else:
             print ('NACK received.')
         return
 
-
     def receiveTelemetry(self):
         print('Receiving telemetry.')
 
         # Read in from serial, check for number of bytes
-        bytes = readSerial()
+        bytes = self.readSerial(26)
+        printBytes(bytes)
         l = len(bytes)
         # Check checksums
         if l != (8+16+2):
             print('ERROR: invalid # of bytes(',l,')')
-            return
+            return False
         if self.checkCheckSum(bytes[2:l]) == False:
             print('ERROR: failed checksum')
-        # Extract Telemetry
-        self.liD.radioConfiguration = bytes[8:l-2]
-        return
+            return False
+
+        # Copy over Telemetry
+        for i in range(8,l-2):
+            self.liD.radioTelemetry[i-8] = bytes[i]
+        return True
 
 
     def printConfiguration(self):
@@ -430,8 +547,8 @@ class pyLiShell(cmd.Cmd):
         sum1 = 0
         sum2 = 0
         for i in range(0,count):
-            sum1 = (sum1+data[i]) % 255
-            sum2 = (sum2+sum1) % 255
+            sum1 = (sum1+data[i]) % 256
+            sum2 = (sum2+sum1) % 256
         return sum2, sum1
 
     def sendCommand(self, cmdID, args):
@@ -453,25 +570,26 @@ class pyLiShell(cmd.Cmd):
             cmdLen += argLen+2              # Add arg len plus 2 bytes for the payload header
             cmd[4] = self.getByte(1, argLen)
             cmd[5] = self.getByte(0, argLen)
-            cmd[6],cmd[7] = self.calculate_checksum( cmd, 6)   # Set Header Checksums
+            cmd[7],cmd[6] = self.calculate_checksum( cmd[2:6], 4)   # Set Header Checksums
             #cmd.resize(cmdLen)
             #for i in range(0,argLen):
             #    cmd[headerLen+i] = args[i]
             cmd[headerLen:] = args          # Appendar args
-            cmd[cmdLen-2:] = self.calculate_checksum( cmd[2:cmdLen-2], (cmdLen-4)) # Append checksum
+            chkA,chkB = self.calculate_checksum( cmd[2:cmdLen-2], (cmdLen-4)) # Append checksum
+            cmd[cmdLen-2:] = [chkB,chkA]
         else:
             cmd[4] = 0
             cmd[5] = 0
-            cmd[6],cmd[7] = self.calculate_checksum( cmd, 6)   # Set Header Checksums
+            cmd[7],cmd[6] = self.calculate_checksum( cmd[2:cmdLen-2], cmdLen-4)   # Set Header Checksums
             #argLen = 0
 
+        print('Sending:(',len(cmd),') ',end='')
         printBytes( cmd )
-
-        sendToSerial( cmd )
+        self.sendToSerial( cmd )
         return
 
     def sendToSerial(self, data):
-        self.serialPort.write(data.encode())
+        self.serialPort.write(data)
 
 
     # ----------------------------------
@@ -486,14 +604,18 @@ class pyLiShell(cmd.Cmd):
         # p = l[0]
         # b = l[1]
         p = 'COM3'
-        b = 9600
+        b = 38400
 
         self.serialPort = serial.Serial(
             port=p,
             baudrate=b,
-            parity=serial.PARITY_ODD,
-            stopbits=serial.STOPBITS_TWO,
-            bytesize=serial.SEVENBITS
+            timeout=2,
+            #parity=serial.PARITY_ODD,
+            #stopbits=serial.STOPBITS_TWO,
+            #bytesize=serial.SEVENBITS
+            bytesize=serial.EIGHTBITS,
+            parity=serial.PARITY_NONE,
+            stopbits=serial.STOPBITS_ONE
         )
 
         try:
@@ -620,11 +742,16 @@ class pyLiShell(cmd.Cmd):
 
 
 if __name__ == '__main__':
-    #pyLiShell().cmdloop()
-    pyLi = pyLiShell()
-    pyLi.do_settx("437001")
-    pyLi.do_setrx("437002")
-    pyLi.do_setdst("CQ")
-    pyLi.do_setsrc("KF6RFX")
-    pyLi.do_qc(None)
-    pyLi.do_qt(None)
+    pyLiShell().cmdloop()
+
+    #pyLi = pyLiShell()
+    #pyLi.do_settxf("437001")
+    #pyLi.do_qc( False )
+    #pyLi.do_setsrc("KF6RFX")
+    #pyLi.do_qc( None)
+    #pyLi.do_settx("437001")
+    #pyLi.do_setrx("437002")
+    #pyLi.do_setdst("CQ")
+    #pyLi.do_setsrc("KF6RFX")
+    #pyLi.do_qc(None)
+    #pyLi.do_qt(None)
