@@ -11,18 +11,9 @@
 #               - Test all commands!
 #               -- sockrx
 #               -- socktx
-#               xx setsrc
-#               xx setdst
-#               xx qt
-#               xx settxf
-#               xx setrxf
-#               -- transmit
-#               -- receive
 #                - stops working after a power cycle of radio?
-# xx Test open port
-# xx Test noop
-# xx- What are we getting back?
 #               - Add error checking.  :/
+#               - Turn into a library/module so others can use code.
 # Notes:        - A valid NOOP: 48 65 10 01 00 00 11 43
 #                               48 65 20 01 0A 0A 35 A1
 # -------------------------------------------------------------------------------
@@ -126,10 +117,11 @@ class lithium():
         self.packetHeader[0] = 0x48
         self.packetHeader[1] = 0x65
 
+    # Everything needs a hello world
     def helloWorld(self):
         print('Lithium: Hello World')
 
-        #int.from_bytes(self.radioTelemetry[0:2], byteorder='big', signed=False) )
+    # Prints telemetry from the radio.
     def printTelemetry(self):
         print('Lithium Telemetry:')
         print('Op Counter: ', int.from_bytes(self.radioTelemetry[0:2], byteorder='little', signed=False) )
@@ -140,6 +132,7 @@ class lithium():
         print('Bytes txd:  ', int.from_bytes(self.radioTelemetry[12:16], byteorder='little', signed=True) )
         return
 
+    # Prints Configruation from the radio.
     def printConfiguration(self):
         print('Lithium Configuration:')
         print('\tIF bps:    ', self.radioConfiguration[0], ' ', self.IF_BAUD[self.radioConfiguration[0]])
@@ -160,6 +153,7 @@ class lithium():
         print (' '.join('0x{:02x}'.format(x) for x in self.radioConfiguration[32:34]))
         #int.from_bytes(self.radioConfiguration[6:10], byteorder='big', signed=False)
 
+    # Sets the source call sign in radio configuration variable
     def setSrcCall(self, src):
         l = len(src)
         if l > 6:
@@ -172,6 +166,7 @@ class lithium():
                 self.radioConfiguration[14+i] = 0x20 # pad with spaces.
         return
 
+    # Sets the destination call sign in radio configuration variable
     def setDstCall(self, dst):
         l = len(dst)
         if l > 6:
@@ -185,6 +180,7 @@ class lithium():
         return
 
 
+    # Sets the transmit frequency in the radio configuration variable
     def setTxFreq(self, freq):
         bytes = intToByteArray( freq, 4 )
         print('Len bytes:', len(bytes))
@@ -196,6 +192,7 @@ class lithium():
         self.radioConfiguration[13] = bytes[0]
         return
 
+    # Sets the receive frequency in the radio configuration variable
     def setRxFreq(self, freq):
         bytes = intToByteArray( freq, 4 )
         print('Len bytes:', len(bytes))
@@ -206,6 +203,7 @@ class lithium():
         self.radioConfiguration[9] = bytes[0]
         return
 
+    # Sets the post amble in the radio configuration variable
     def setPostAmble(self, num):
         bytes = intToByteArray( num, 2 )
         print('Len bytes:', len(bytes))
@@ -214,6 +212,7 @@ class lithium():
         self.radioConfiguration[29] = bytes[0]
         return
 
+    # Sets the pre amble in the radio configuration variable
     def setPreAmble(self, num):
         bytes = intToByteArray( num, 2 )
         print('Len bytes:', len(bytes))
@@ -223,18 +222,21 @@ class lithium():
         return
 
 
-
+# ================================================================================
+# Name: pyLiShell
+# Purpose:  Provides a command shell for configuring the Lithium radio. Extend the
+#           python module 'cmd'.
+# ================================================================================
 class pyLiShell(cmd.Cmd):
     intro = 'Welcome to the pyLiShell.'
     prompt = 'pyLi>'
-    #liD = None
 
+    # Hard coded networking params.  TBD should make an argument.
     HOST = 'localhost'
     PORT = 12601
     DEBUG = True
-    # FILE = 'temp.txt'
-    # WRAP_NUM = 10
 
+    # Initialization.  Creates a lithium variable.
     def __init__(self):
         self.liD = lithium()
         self.do_connect(None)   # temp, XXX remove
@@ -317,8 +319,6 @@ class pyLiShell(cmd.Cmd):
         self.liD.setTxFreq( int(arg) )
         self.sendCommand( 0x1006, self.liD.radioConfiguration )
         self.receiveAck()
-        # abc
-
 
     def do_setrxf(self, arg):
         'Set RX frequency'
@@ -328,7 +328,6 @@ class pyLiShell(cmd.Cmd):
         self.liD.setRxFreq( int(arg) )
         self.sendCommand( 0x1006, self.liD.radioConfiguration )
         self.receiveAck()
-
 
     def do_tx(self, arg):
         'Transmit message.'
@@ -350,18 +349,11 @@ class pyLiShell(cmd.Cmd):
             printBytes(data)
             print("".join(map(chr,data)))
 
-
-
-    def do_test(self, arg):
-        'test code'
-        print('Hello world.')
-        print('-->  ', )
-        self.liD.helloWorld()
-
     #--------------------------------------------------------------------------
-    # Other functions
+    # Other functions, used by shell commands
     #--------------------------------------------------------------------------
 
+    # abc, commenting here
     def transmitData(self,data):
         self.sendCommand( 0x1003, data )
         self.receiveAck()
