@@ -5,8 +5,11 @@
 #               Compatible with protocole from 3.10 release from AD.
 # Version:      0.1
 # Date:         04 August 2016
-# Todo:         - Commands to implement
-#               -- TCP socket for TX/RXing data.  Lithium packet headers stripped and not added, just the raw data is sent through.  Bytes sent when a full packet is ready, that is payload is 255 bytes.
+# Todo:         - Add power amp setting
+#               - Commands to implement
+#               -- TCP socket for TX/RXing data.  Lithium packet headers stripped
+#                  and not added, just the raw data is sent through.  Bytes sent
+#                  when a full packet is ready, that is payload is 255 bytes.
 #               -- Double check against known software
 #               - Test all commands!
 #               -- sockrx
@@ -14,6 +17,8 @@
 #                - stops working after a power cycle of radio?
 #               - Add error checking.  :/
 #               - Turn into a library/module so others can use code.
+#               - Add debug printfs, or move prints to a debug mode.
+#               - Add full set of commands
 # Notes:        - A valid NOOP: 48 65 10 01 00 00 11 43
 #                               48 65 20 01 0A 0A 35 A1
 # -------------------------------------------------------------------------------
@@ -33,10 +38,14 @@ def intToByteArray(value, size):
     #print (''.join('{:02x}'.format(x) for x in b))
     return b
 
+#--------------------------
+# Func: Prints bytes as hex
+#--------------------------
 def printBytes( data ):
     print (' '.join('{:02x}'.format(x) for x in data))
 
 
+# Base class for a Lithium object.  Should this be a separate file?
 class lithium():
     # #defines for Lithium
     IF_BAUD = ['9600', '19200', '38400', '76800', '115200']
@@ -86,7 +95,7 @@ class lithium():
         #   {
         #      0    uint_2 op_counter;
         #      2    sint_2 msp430_temp;
-        #      4    uint_1 time_count[3];
+        #      4    uint_1 time_count[3];  // Note time_count doesn't have a set period.  Func of Lithium sampling.
         #      7    uint_1 rssi;
         #      8    uint_4 bytes_received;
         #      12   uint_4 bytes_transmitted;
